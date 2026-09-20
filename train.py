@@ -36,7 +36,7 @@ from pathlib import Path
 
 import yaml
 
-from common import HERE, load_config, p, read_jsonl, run_dir
+from common import HERE, free_cuda, load_config, p, read_jsonl, run_dir
 
 TREND_FIELDS = ["step", "tag", "asr_cer", "asr_wer", "style_separation",
                 "gen_failures", "verdict"]
@@ -281,7 +281,7 @@ def verdict(base, cur) -> str:
     return " ".join(bits)
 
 
-def watcher(cfg, stop: threading.Event):
+def watcher(cfg, stop: threading.Event, once: bool = False):
     """Evaluate each checkpoint as it appears; record the trend."""
     rd = run_dir(cfg)
     trend = rd / "eval_trend.csv"
@@ -294,7 +294,9 @@ def watcher(cfg, stop: threading.Event):
     seen, best = set(), None
 
     waited = 0
-    while not stop.is_set():
+    while True:
+        if not once and stop.is_set():
+            break
         found = find_checkpoints(rd)
         if not found and waited >= 600:
             print(f"[watcher] no checkpoint dirs under {rd} after 10 min. "
@@ -349,6 +351,8 @@ def watcher(cfg, stop: threading.Event):
             keep = int(t.get("keep_checkpoints", 2))
             protect = [best[2]] if (best and t.get("protect_best", True)) else []
             prune_checkpoints(rd, keep, protect)
+        if once:
+            break
         stop.wait(60)
 
 
@@ -413,12 +417,20 @@ def main():
         if not run_eval(["--tag", btag]):
             print("baseline failed; comparisons will be unavailable")
 
+    # evaluate.py loads a second 2B model; running it concurrently with a
+    # full-SFT job is a reliable way to OOM an 80GB card. Default is to
+    # evaluate after training instead.
+    live_eval = (cfg["eval"]["auto"] and not args.no_auto_eval
+                 and cfg["eval"].get("during_training", False))
     stop = threading.Event()
     th = None
-    if cfg["eval"]["auto"] and not args.no_auto_eval:
+    if live_eval:
         th = threading.Thread(target=watcher, args=(cfg, stop), daemon=True)
         th.start()
-        print("checkpoint watcher started")
+        print("checkpoint watcher started (sharing the GPU with training)")
+    elif cfg["eval"]["auto"] and not args.no_auto_eval:
+        print("evaluation deferred until training finishes "
+              "(eval.during_training: false)")
 
     help_text = trainer_help(script)
     cfg_flag = detect_flag(help_text, CONFIG_FLAGS)
@@ -474,6 +486,14 @@ def main():
             time.sleep(20)
             stop.set()
             th.join(timeout=600)
+
+    # deferred evaluation: the GPU is free now that the trainer has exited
+    if not live_eval and cfg["eval"]["auto"] and not args.no_auto_eval:
+        cks = [c for c in find_checkpoints(rd) if step_of(c) > 0]
+        if cks:
+            print(f"\n=== evaluating {len(cks)} checkpoint(s) ===")
+            free_cuda()
+            watcher(cfg, threading.Event(), once=True)
 
     trend = rd / "eval_trend.csv"
     print("\n" + "=" * 66)

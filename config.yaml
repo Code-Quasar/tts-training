@@ -41,10 +41,14 @@ train:
 
   base_model: openbmb/VoxCPM2          # -> pretrained_path
   epochs: 1                            # -> max_steps / num_iters (computed)
-  batch_size: 8
-  grad_accum_steps: 4                  # effective 32
+
+  # Full SFT of a 2B model needs ~32 GB just for weights + grads + AdamW
+  # states before any activations, so an 80 GB card is tighter than it looks.
+  # Keep effective batch at 32 via grad accumulation rather than batch size.
+  batch_size: 2                        # raise only if VRAM heads allow
+  grad_accum_steps: 16                 # effective 32
   num_workers: 4
-  max_batch_tokens: 16384              # -> 8192 on OOM
+  max_batch_tokens: 4096               # first thing to lower on OOM
   learning_rate: 1.0e-5                # mode: lora -> 1.0e-4
   weight_decay: 0.01
   warmup_ratio: 0.1                    # -> warmup_steps (computed)
@@ -75,5 +79,10 @@ lora:                                  # used only when train.mode == lora
 
 eval:
   asr_model: TuniSpeech-AI/whisper-tunisian-dialect
-  auto: true                           # evaluate each checkpoint as it lands
+  auto: true                           # evaluate checkpoints automatically
   baseline_tag: base
+
+  # evaluate.py loads a SECOND 2B model. Doing that while training holds most
+  # of the card causes CUDA OOM, so by default evaluation runs after the
+  # trainer exits. Set true only if you have VRAM to spare (e.g. LoRA).
+  during_training: false
