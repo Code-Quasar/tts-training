@@ -41,8 +41,27 @@ sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_paths()["include"], "Pyt
 EOF
 
 say "venv -> $VENV"
+# A venv on a NETWORK VOLUME outlives the container that made it. If the new
+# image has a different python, the venv's symlinks dangle and `activate`
+# silently leaves you on the system interpreter. Detect and rebuild.
+if [[ -d "$VENV" ]]; then
+  if ! "$VENV/bin/python" -c "import sys" 2>/dev/null; then
+    echo "existing venv is broken (built by another image) — rebuilding"
+    rm -rf "$VENV"
+  fi
+fi
 [[ -d "$VENV" ]] || "$PY" -m venv "$VENV"
 source "$VENV/bin/activate"
+
+# Confirm activation actually took. `source activate` only edits shell vars;
+# if the venv is unusable, pip silently targets the system python instead.
+ACTIVE=$(python -c 'import sys;print(sys.prefix)')
+if [[ "$ACTIVE" != "$VENV" ]]; then
+  echo "WARNING: venv did not activate (sys.prefix=$ACTIVE, expected $VENV)"
+  echo "         installing into the system python instead."
+  echo "         that is fine as long as you use the SAME python everywhere:"
+  echo "           $(command -v python)"
+fi
 pip install -U pip wheel setuptools -q
 
 say "torch"
@@ -86,13 +105,30 @@ else
 fi
 
 git -C "$REPO" rev-parse HEAD > "$REPO/.installed_commit" 2>/dev/null || true
-pip install -e "$REPO" -q          # editable: the trainer lives in the repo
-python - <<'EOF'
-import voxcpm
-print("voxcpm ok", getattr(voxcpm, "__version__", "(no __version__)"))
-EOF
+
+# NOT quiet: this is the step that fails, and -q hides the reason.
+echo "installing voxcpm (editable) with $(command -v python)"
+if ! pip install -e "$REPO"; then
+  echo
+  echo "ERROR: pip install -e $REPO failed (output above)."
+  echo "Common causes:"
+  echo "  - dependency conflict with this image's torch ($(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?'))"
+  echo "  - stale /workspace/venv built by a previous pod: rm -rf $VENV && bash install.sh"
+  exit 1
+fi
+
+if ! python -c "import voxcpm" 2>/dev/null; then
+  echo
+  echo "ERROR: pip reported success but 'import voxcpm' still fails."
+  echo "  interpreter: $(python -c 'import sys;print(sys.executable)')"
+  echo "  pip target : $(pip -V)"
+  echo "These two must match. If they do not, the venv is not active:"
+  echo "  rm -rf $VENV && bash install.sh"
+  exit 1
+fi
+python -c "import voxcpm;print('voxcpm ok', getattr(voxcpm,'__version__','(no __version__)'))"
 command -v voxcpm >/dev/null && echo "voxcpm CLI on PATH" \
-  || echo "WARNING: no 'voxcpm' CLI — `voxcpm validate` will be unavailable"
+  || echo "note: no 'voxcpm' CLI on PATH — 'voxcpm validate' unavailable"
 
 say "deps"
 pip install -q -r "$HERE/requirements.txt"
