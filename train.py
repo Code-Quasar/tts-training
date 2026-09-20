@@ -120,6 +120,9 @@ def prune_checkpoints(rd: Path, keep: int, protect=()) -> list:
         try:
             if c.resolve() in protected:
                 continue
+            # never touch something the trainer may still be writing
+            if time.time() - c.stat().st_mtime < 120:
+                continue
             gb = sum(f.stat().st_size for f in c.rglob("*") if f.is_file()) / 1024 ** 3
             shutil.rmtree(c)
             removed.append((c.name, gb))
@@ -130,6 +133,27 @@ def prune_checkpoints(rd: Path, keep: int, protect=()) -> list:
         print(f"[prune] removed {', '.join(n for n, _ in removed)} "
               f"— freed {freed:.1f} GiB", flush=True)
     return removed
+
+
+def pruner(cfg, stop: threading.Event):
+    """Delete old checkpoints DURING training.
+
+    This is filesystem-only - no GPU, no model loading - so it runs whether
+    or not evaluation is deferred. VoxCPM2 has no save_total_limit and a
+    full-SFT checkpoint is ~24 GB, so without this the volume fills mid-run.
+    """
+    rd = run_dir(cfg)
+    keep = int(cfg["train"].get("keep_checkpoints", 2))
+    if keep <= 0:
+        print("[pruner] disabled (keep_checkpoints <= 0)")
+        return
+    print(f"[pruner] keeping the newest {keep} checkpoint(s)")
+    while not stop.is_set():
+        try:
+            prune_checkpoints(rd, keep)
+        except Exception as e:
+            print(f"[pruner] {type(e).__name__}: {e}", flush=True)
+        stop.wait(30)
 
 
 def trainer_help(script: Path) -> str:
@@ -432,6 +456,11 @@ def main():
         print("evaluation deferred until training finishes "
               "(eval.during_training: false)")
 
+    # Pruning must run during training regardless of the evaluation setting -
+    # it is disk-only and is what keeps the volume from filling up.
+    prune_th = threading.Thread(target=pruner, args=(cfg, stop), daemon=True)
+    prune_th.start()
+
     help_text = trainer_help(script)
     cfg_flag = detect_flag(help_text, CONFIG_FLAGS)
     if cfg_flag is None:
@@ -484,8 +513,10 @@ def main():
         if th:
             print("waiting for the watcher to finish the last checkpoint…")
             time.sleep(20)
-            stop.set()
+        stop.set()
+        if th:
             th.join(timeout=600)
+        prune_th.join(timeout=60)
 
     # deferred evaluation: the GPU is free now that the trainer has exited
     if not live_eval and cfg["eval"]["auto"] and not args.no_auto_eval:
