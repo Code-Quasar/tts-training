@@ -1,0 +1,74 @@
+# The only file you edit. install.sh, check.py, data.py and train.py all read it.
+
+project: voxcpm-tn
+
+# Pinned so a rebuild six months from now behaves the same.
+# 2.0.3 is the first release with `voxcpm validate`, optional ref_audio in the
+# fine-tuning pipeline, and hardened LoRA checkpoint loading - all of which
+# this repo depends on. Do not drop below it.
+# https://github.com/OpenBMB/VoxCPM/releases
+voxcpm:
+  version: v2.0.3
+  repo_url: https://github.com/OpenBMB/VoxCPM.git
+  allow_fallback: true        # fall back to main if the tag is unreachable
+
+paths:
+  root:        /workspace              # network volume on RunPod
+  data:        /workspace/data/tunswitch
+  runs:        /workspace/runs
+  voxcpm_repo: /workspace/VoxCPM
+  venv:        /workspace/venv
+
+data:
+  hf_dataset:  MBZUAI/TunSwitch        # source corpus
+  hf_repo:     Code-Quasar/Tn-TTS      # your prepared copy (push/pull)
+  dialect_tag: Tunisian Dialect        # prefixed to EVERY transcript
+  sample_rate: 16000                   # AudioVAE encoder input (not output)
+  min_duration: 1.0
+  max_duration: 20.0
+  min_words: 1
+  description_rate: 0.45               # share ALSO getting an emotion word
+  ref_rate: 0.30                       # share getting a ref_audio clip
+  val_frac: 0.05
+
+# Key names below match VoxCPM2's own fine-tuning schema so nothing is
+# silently dropped. The trainer is STEP-based, not epoch-based: `epochs` is a
+# convenience that train.py converts to max_steps using your manifest size.
+# https://voxcpm.readthedocs.io/en/latest/finetuning/finetune.html
+train:
+  run_name: tn_sft_v1
+  mode: full                           # full | lora  (lora block omitted => full)
+
+  base_model: openbmb/VoxCPM2          # -> pretrained_path
+  epochs: 1                            # -> max_steps / num_iters (computed)
+  batch_size: 8
+  grad_accum_steps: 4                  # effective 32
+  num_workers: 4
+  max_batch_tokens: 16384              # -> 8192 on OOM
+  learning_rate: 1.0e-5                # mode: lora -> 1.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.1                    # -> warmup_steps (computed)
+
+  # checkpointing + validation. ~148 steps/epoch at effective batch 32 on
+  # ~4.7k clips, so 50 gives you three checkpoints to choose between.
+  # Full-SFT checkpoints are ~24 GB each (weights + optimizer + scheduler).
+  save_interval: 50
+  valid_interval: 50                   # val loss on val.jsonl
+  log_interval: 10
+
+  # Anything not in the documented schema goes here verbatim. Left empty
+  # because unknown keys are ignored silently - add only what you verify.
+  extra: {}
+
+lora:                                  # used only when train.mode == lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  enable_lm: true
+  enable_dit: true                     # critical - adapts the diffusion decoder
+  enable_proj: true
+
+eval:
+  asr_model: TuniSpeech-AI/whisper-tunisian-dialect
+  auto: true                           # evaluate each checkpoint as it lands
+  baseline_tag: base

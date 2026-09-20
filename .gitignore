@@ -1,0 +1,50 @@
+# Never commit these - they are large, regenerable, or machine-specific.
+
+# environments
+# NOTE: *venv* does NOT match "voxcpm-env" (that's "-env", not "venv").
+*venv*/
+*-env/
+*_env/
+env/
+.venv/
+__pycache__/
+*.pyc
+
+# audio + datasets
+*.wav
+*.mp3
+*.webm
+*.vtt
+data/
+data_test/
+notebooks/../data/
+
+# pipeline state
+*.db
+*.db-wal
+*.db-shm
+state*.db
+
+# training artifacts
+runs/
+eval_out/
+test_out/
+hf_cache/
+*.ckpt
+*.safetensors
+*.pth
+*.pt
+
+# logs
+*.log
+
+# manifests are generated (data.py prepare / pull), never committed
+train.jsonl
+val.jsonl
+*_manifest.jsonl
+trainer_config.yaml
+
+# keep these
+!eval_sentences.txt
+!**/conf/*.yaml
+!pipeline/config*.yaml

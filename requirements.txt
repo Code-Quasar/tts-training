@@ -1,0 +1,12 @@
+# torch + voxcpm are installed by install.sh (CUDA-specific / editable)
+pyyaml
+numpy
+tqdm
+soundfile
+librosa
+huggingface_hub
+datasets
+pandas
+pyarrow
+transformers
+accelerate

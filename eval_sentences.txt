@@ -1,0 +1,38 @@
+# Fixed Tunisian evaluation set. NEVER put these in training data.
+# Format: category<TAB>text
+# Keep this file frozen once you start - changing it invalidates comparisons.
+
+decl	الطقس اليوم سخون برشة
+decl	نحب ناكل كسكسي نهار الأحد
+decl	الدار متاعنا قريبة من البحر
+decl	ما عنديش حتى حاجة نعملها اليوم
+decl	خويا جا من فرنسا البارح
+decl	القهوة هذي بنينة برشة
+
+quest	شنوة أحوالك اليوم؟
+quest	وين باش نمشيو الليلة؟
+quest	قداش الساعة توا؟
+quest	علاش ما جيتش للعرس؟
+quest	شكون قالك هالحكاية؟
+
+codesw	نمشي لل bureau متاعي كل صباح
+codesw	عندي rendez-vous مع الطبيب
+codesw	الـ weekend هذا باش نرتاح شوية
+codesw	بعثتلي message في الواتساب
+codesw	الـ train تأخر ساعة كاملة
+
+numbers	الكتاب هذا بخمسة وعشرين دينار
+numbers	نتلاقاو نهار الخميس على الثمنية
+numbers	عمري خمسة وثلاثين سنة
+
+entity	مشينا لسوسة في الصيف
+entity	تونس العاصمة كبيرة برشة
+entity	قابلت أحمد في صفاقس
+
+longform	البارح مشيت للسوق مع أمي. شرينا خضرة وغلة. بعد رجعنا للدار وطيبنا العشاء.
+longform	عندي صاحب يخدم في ألمانيا. كل عام يجي يزورنا في الصيف. نقعدو نحكيو برشة على أيام الطفولة.
+longform	الحياة في تونس ما هيش ساهلة أما فيها برشة حاجات باهية. الناس طيبين والماكلة بنينة. كل ما نسافر نتوحش بلادي.
+
+expressive	ما تصدقش شنوة صار البارح!
+expressive	ما نظنش باش يرجعو.
+expressive	يزي من الحكي برك!
