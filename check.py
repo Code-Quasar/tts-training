@@ -192,7 +192,13 @@ def check_config_keys(cfg):
         except Exception:
             pass
 
-    mine = set(cfg["train"]) - {"run_name", "mode", "base_model"}
+    # Keys train.py consumes itself and never forwards to the trainer:
+    #   epochs/warmup_ratio  -> converted to max_steps/warmup_steps
+    #   keep_checkpoints etc -> our own pruning, VoxCPM2 has no equivalent
+    #   extra                -> verified-only passthrough
+    OURS = {"run_name", "mode", "base_model", "epochs", "warmup_ratio",
+            "keep_checkpoints", "protect_best", "extra"}
+    mine = set(cfg["train"]) - OURS
     unknown = sorted(mine - known)
     if unknown:
         return rep("config keys", WARN,
@@ -237,15 +243,29 @@ def download_and_generate(cfg, quick):
     if quick:
         rep("model weights", WARN, "skipped (--quick)")
         return rep("generation", WARN, "skipped (--quick)")
-    model_id = cfg["train"]["base_model"]
-    try:
-        from huggingface_hub import snapshot_download
-        print(f"\ndownloading {model_id} (~10 GB, cached)…")
-        path = snapshot_download(model_id, token=os.environ.get("HF_TOKEN"))
-        size = sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
-        rep("model weights", OK, f"{size/1024**3:.1f} GiB")
-    except Exception as e:
-        return rep("model weights", FAIL, f"{type(e).__name__}: {str(e)[:90]}")
+    model_id = str(cfg["train"]["base_model"])
+
+    # base_model may be a repo id OR a local directory. snapshot_download
+    # rejects paths, and a cached path from a previous container will not
+    # exist on a new pod - prefer the repo id.
+    local = Path(model_id)
+    if local.is_absolute() or local.exists():
+        if local.exists() and any(local.glob("*.safetensors")):
+            rep("model weights", OK, f"local dir {local}")
+        else:
+            return rep("model weights", FAIL,
+                       f"base_model is a path that is missing or has no "
+                       f"weights: {local}. Set it to 'openbmb/VoxCPM2' in "
+                       f"config.yaml — local cache paths do not survive pods.")
+    else:
+        try:
+            from huggingface_hub import snapshot_download
+            print(f"\ndownloading {model_id} (~10 GB, cached)…")
+            path = snapshot_download(model_id, token=os.environ.get("HF_TOKEN"))
+            size = sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
+            rep("model weights", OK, f"{size/1024**3:.1f} GiB")
+        except Exception as e:
+            return rep("model weights", FAIL, f"{type(e).__name__}: {str(e)[:90]}")
 
     try:
         import numpy as np

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -59,6 +60,31 @@ def find_checkpoints(rd: Path) -> list[Path]:
             if c.is_dir():
                 found[c] = step_of(c)
     return sorted(found, key=lambda c: found[c])
+
+
+def resolve_model_path(model_id: str) -> str:
+    """The trainer's `pretrained_path` must be a LOCAL DIRECTORY.
+
+    Passing a repo id makes it look for 'openbmb/VoxCPM2/config.json' as a
+    filesystem path. So keep the portable repo id in config.yaml and resolve
+    it to the cached snapshot dir here. With HF_HOME on the network volume
+    that cache survives pod restarts; a hard-coded /root/.cache path does not.
+    """
+    p = Path(model_id)
+    if p.exists() and (p / "config.json").exists():
+        return str(p.resolve())
+    if p.is_absolute():
+        raise SystemExit(
+            f"base_model points at {p}, which has no config.json.\n"
+            f"Set it to 'openbmb/VoxCPM2' in config.yaml.")
+
+    from huggingface_hub import snapshot_download
+    print(f"resolving {model_id} -> local snapshot ...")
+    path = snapshot_download(model_id, token=os.environ.get("HF_TOKEN"))
+    if not (Path(path) / "config.json").exists():
+        raise SystemExit(f"snapshot at {path} has no config.json")
+    print(f"  {path}")
+    return path
 
 
 def prune_checkpoints(rd: Path, keep: int, protect=()) -> list:
@@ -156,7 +182,8 @@ def build_trainer_config(cfg, out_path: Path) -> Path:
 
     val = data_dir / "val.jsonl"
     tc = {
-        "pretrained_path": t["base_model"],
+        # must be a local directory, not a repo id
+        "pretrained_path": resolve_model_path(str(t["base_model"])),
         "train_manifest": str(data_dir / "train.jsonl"),
         # documented as optional; empty string disables validation
         "val_manifest": str(val) if val.exists() else "",
@@ -278,10 +305,17 @@ def watcher(cfg, stop: threading.Event):
             if ck.name in seen:
                 continue
             seen.add(ck.name)
+            step = step_of(ck)
+            if step <= 0:
+                # VoxCPM2 writes step_0000000 before training starts. It is
+                # byte-identical to the base model, so evaluating it wastes
+                # minutes of GPU and adds a meaningless row to the trend.
+                print(f"[watcher] skipping {ck.name} (pre-training checkpoint)",
+                      flush=True)
+                continue
             time.sleep(15)                      # let the writer finish
             if not any(ck.iterdir()):
                 continue
-            step = step_of(ck)
             tag = f"{rd.name}_s{step}"
             print(f"\n[watcher] evaluating {ck.name}", flush=True)
             if not run_eval(["--ckpt", str(ck), "--tag", tag]):
