@@ -56,6 +56,11 @@ train:
   valid_interval: 50                   # val loss on val.jsonl
   log_interval: 10
 
+  # VoxCPM2 has no save_total_limit - it keeps every checkpoint and will
+  # fill the volume. train.py prunes after each evaluation instead.
+  keep_checkpoints: 2                  # newest N survive
+  protect_best: true                   # never delete the best-scoring one
+
   # Anything not in the documented schema goes here verbatim. Left empty
   # because unknown keys are ignored silently - add only what you verify.
   extra: {}

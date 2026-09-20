@@ -61,6 +61,51 @@ def find_checkpoints(rd: Path) -> list[Path]:
     return sorted(found, key=lambda c: found[c])
 
 
+def prune_checkpoints(rd: Path, keep: int, protect=()) -> list:
+    """Delete old checkpoints, keeping the newest `keep` plus anything
+    protected. VoxCPM2 keeps every checkpoint and has no save_total_limit,
+    so a full-SFT run (~24 GB each) fills the volume quickly.
+
+    Never removes `latest/` or whatever it points at - the trainer resumes
+    from there, and deleting it breaks restart-after-crash.
+    """
+    import shutil
+
+    cks = find_checkpoints(rd)
+    if len(cks) <= max(keep, 1):
+        return []
+
+    protected = {c.resolve() for c in cks[-keep:]}      # newest N
+    latest = rd / "latest"
+    if latest.exists():
+        try:
+            protected.add(latest.resolve())            # symlink target too
+        except OSError:
+            pass
+    for extra in protect:
+        if extra:
+            try:
+                protected.add(Path(extra).resolve())
+            except OSError:
+                pass
+
+    removed = []
+    for c in cks[:-keep]:
+        try:
+            if c.resolve() in protected:
+                continue
+            gb = sum(f.stat().st_size for f in c.rglob("*") if f.is_file()) / 1024 ** 3
+            shutil.rmtree(c)
+            removed.append((c.name, gb))
+        except Exception as e:
+            print(f"[prune] could not remove {c.name}: {type(e).__name__}: {e}")
+    if removed:
+        freed = sum(g for _, g in removed)
+        print(f"[prune] removed {', '.join(n for n, _ in removed)} "
+              f"— freed {freed:.1f} GiB", flush=True)
+    return removed
+
+
 def trainer_help(script: Path) -> str:
     """Ask the trainer what it supports rather than assuming."""
     try:
@@ -263,6 +308,13 @@ def watcher(cfg, stop: threading.Event):
                     {"tag": tag, "asr_cer": cer, "checkpoint": str(ck)},
                     indent=2), encoding="utf-8")
                 print(f"[watcher] new best: {tag} (cer {cer})", flush=True)
+
+            # prune only AFTER evaluating - otherwise we'd delete a
+            # checkpoint before knowing whether it was the good one
+            t = cfg["train"]
+            keep = int(t.get("keep_checkpoints", 2))
+            protect = [best[2]] if (best and t.get("protect_best", True)) else []
+            prune_checkpoints(rd, keep, protect)
         stop.wait(60)
 
 
@@ -275,11 +327,31 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--no-auto-eval", action="store_true")
     ap.add_argument("--no-baseline", action="store_true")
+    ap.add_argument("--prune", action="store_true",
+                    help="delete old checkpoints now and exit (safe mid-run)")
+    ap.add_argument("--keep", type=int,
+                    help="override train.keep_checkpoints for --prune")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     rd = run_dir(cfg)
     rd.mkdir(parents=True, exist_ok=True)
+
+    if args.prune:
+        keep = args.keep or int(cfg["train"].get("keep_checkpoints", 2))
+        protect = []
+        bj = rd / "best.json"
+        if bj.exists() and cfg["train"].get("protect_best", True):
+            protect.append(json.loads(bj.read_text()).get("checkpoint"))
+        cks = find_checkpoints(rd)
+        print(f"{len(cks)} checkpoint(s) in {rd}; keeping newest {keep}"
+              + (f" + best ({Path(protect[0]).name})" if protect else ""))
+        removed = prune_checkpoints(rd, keep, protect)
+        if not removed:
+            print("nothing to remove")
+        import shutil as _sh
+        print(f"free: {_sh.disk_usage(rd).free / 1024 ** 3:.0f} GiB")
+        return
 
     print("=" * 66)
     print(f"{cfg['project']} — {cfg['train']['run_name']} "

@@ -109,15 +109,35 @@ def check_disk(path, full_sft):
 def check_voxcpm(cfg):
     import subprocess
 
+    # Report the interpreter first: a venv/system-python mix-up is the most
+    # common cause of "No module named voxcpm" on a pod whose image already
+    # ships torch.
+    venv = Path(cfg["paths"].get("venv", "")) / "bin" / "python"
+    in_venv = str(venv) in sys.executable or sys.prefix != sys.base_prefix
+    rep("interpreter", OK if in_venv else WARN,
+        f"{sys.executable}" + ("" if in_venv else
+                               f" — NOT a venv. expected {venv}; "
+                               f"run: source {venv.parent}/activate"))
+
+    imported = True
     try:
         import voxcpm
         rep("voxcpm", OK, getattr(voxcpm, "__version__", "importable"))
     except ImportError as e:
-        return rep("voxcpm", FAIL, f"{e} — run install.sh")
+        imported = False
+        rep("voxcpm", FAIL, f"{e} — run install.sh (do NOT skip its output)")
 
+    # keep going even if the import failed - the repo state is the diagnosis
     repo = p(cfg, "voxcpm_repo")
     if not repo.exists():
-        return rep("trainer repo", FAIL, f"{repo} not found — run install.sh")
+        return rep("trainer repo", FAIL,
+                   f"{repo} not found — install.sh never cloned it")
+    n = len(list(repo.glob("*")))
+    rep("trainer repo", OK if n else FAIL,
+        f"{repo} ({n} entries)" + ("" if n else " — empty, clone failed"))
+    if not imported:
+        rep("voxcpm install", FAIL,
+            f"repo exists but not importable — run: pip install -e {repo}")
 
     # what is actually checked out vs what config.yaml pins
     want = cfg.get("voxcpm", {}).get("version", "")
